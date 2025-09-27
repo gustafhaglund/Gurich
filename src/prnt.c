@@ -63,7 +63,7 @@ void gurich_prnt
 	tme = localtime(&t);
 	strftime(datetime, sizeof(datetime), "%Y/%m/%d %H:%M:%S", tme);
 
-	sendbunker.data = malloc((beginlen = (100 + strlen(psfile))));
+	sendbunker.data = malloc((beginlen = (1024 + strlen(psfile))));
 	fs.files = malloc(10);
 
 	gurich_alloc_check(sendbunker.data);
