@@ -24,9 +24,9 @@
 
 /* This file is largely based on source code from jbigkit, by Markus Kuhn. */
 
-static void jbg_out(unsigned char *jbgenc, size_t len, struct gurich_jbg_st *jbg)
-{
-	size_t i, c;
+static void jbg_out(unsigned char *jbgenc, size_t len, void *jbg_tmp)
+{ 
+	struct gurich_jbg_st *jbg = (struct gurich_jbg_st *)jbg_tmp;	size_t i, c;
 
 	jbg->jbig = realloc(jbg->jbig, (jbg->jbiglen+len));
 	gurich_alloc_check(jbg->jbig);
