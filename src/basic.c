@@ -28,6 +28,41 @@
  *
  */
 #ifndef _NO_USB
+
+/*
+ * Some models (e.g. the SP112SU, which combines a printer with a scanner)
+ * expose the printer function on an interface other than 0 -- interface 0
+ * there is the scanner. Instead of hardcoding an interface number, walk the
+ * active configuration and claim whichever interface actually advertises
+ * itself as a USB printer-class device (bInterfaceClass 0x07). Falls back
+ * to interface 0 if that can't be determined, which preserves the original
+ * behaviour for the plain SP110.
+ */
+static unsigned int gurich_find_printer_interface(libusb_device * device)
+{
+	struct libusb_config_descriptor * config;
+	unsigned int iface = 0;
+
+	if (libusb_get_active_config_descriptor(device, &config) != 0) {
+		return iface;
+	}
+
+	for (uint8_t i = 0; i < config->bNumInterfaces; ++i) {
+		const struct libusb_interface * intf = &config->interface[i];
+
+		for (int a = 0; a < intf->num_altsetting; ++a) {
+			if (intf->altsetting[a].bInterfaceClass == LIBUSB_CLASS_PRINTER) {
+				iface = intf->altsetting[a].bInterfaceNumber;
+				libusb_free_config_descriptor(config);
+				return iface;
+			}
+		}
+	}
+
+	libusb_free_config_descriptor(config);
+	return iface;
+}
+
 static void printer_usb(struct gurich_usb * g, struct libusb_device_descriptor devdesc)
 {
 	char libusb_strerror[128];
@@ -44,15 +79,16 @@ static void printer_usb(struct gurich_usb * g, struct libusb_device_descriptor d
 	}
 
 	g->device = libusb_get_device(g->device_handle);
+	g->interface = gurich_find_printer_interface(g->device);
 
-	libusb_error = libusb_kernel_driver_active(g->device_handle, 0);
+	libusb_error = libusb_kernel_driver_active(g->device_handle, g->interface);
 	if (libusb_error == 1) {
-		if ((libusb_error = libusb_detach_kernel_driver(g->device_handle, 0)) < 0) {
+		if ((libusb_error = libusb_detach_kernel_driver(g->device_handle, g->interface)) < 0) {
 			goto libusb_fail;
 		}
 	}
 
-	libusb_error = libusb_claim_interface(g->device_handle, 0);
+	libusb_error = libusb_claim_interface(g->device_handle, g->interface);
 	if (libusb_error != 0) {
 		goto libusb_fail;
 	}
@@ -122,8 +158,8 @@ void cleanup_usb(struct gurich_usb * g)
 {
 	if (g->initialized)
 	{
-		libusb_release_interface(g->device_handle, 0);
-		libusb_attach_kernel_driver(g->device_handle, 0);
+		libusb_release_interface(g->device_handle, g->interface);
+		libusb_attach_kernel_driver(g->device_handle, g->interface);
 		libusb_close(g->device_handle);
 
 		libusb_exit(g->ctx);

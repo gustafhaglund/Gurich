@@ -29,6 +29,8 @@
 #include <stdbool.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdint.h>
+#include <time.h>
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -110,7 +112,7 @@ bool gurich_dir_checkup();
 
 char * get_username();
 
-void gurich_workaround_pbmgen
+bool gurich_workaround_pbmgen
 (
 	struct gurich_usb * g,
 	const char * res,

@@ -47,11 +47,13 @@ size_t gurich_dirent_fs(
 		if (strstr(r_read->d_name, reqfname) == NULL)
 			continue;
 
-		fs->files = realloc(fs->files, (files+1) * sizeof(char *));
+		char **resized;
 
-		if (fs->files == NULL) {
+		resized = realloc(fs->files, (files+1) * sizeof(char *));
+		if (resized == NULL) {
 			goto dirent_mem_fail;
 		}
+		fs->files = resized;
 
 		len = (strlen(path)+_D_EXACT_NAMLEN(r_read))+1;
 		fs->files[files] = malloc(len);
@@ -70,6 +72,14 @@ size_t gurich_dirent_fs(
 	return files;
 
 	dirent_mem_fail:
+		if (r_dir != NULL) {
+			closedir(r_dir);
+		}
+		for (size_t i = 0; i < files; ++i) {
+			free(fs->files[i]);
+		}
+		free(fs->files);
+		fs->files = NULL;
 		puts("Can't allocate memory (RAM). Quitting.");
 		return 0;
 		/* Expecting the function calling gurich_dirent_fs to then exit gracefully. */

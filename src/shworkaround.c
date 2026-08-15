@@ -21,29 +21,41 @@
 */
 
 #include <gurich.h>
+#include <sys/wait.h>
 
-void gurich_workaround_pbmgen(
+bool gurich_workaround_pbmgen(
 	struct gurich_usb * g, const char * res,
 	char * papertype, const char * psfile)
 {
 	char gs_cmd[250];
+	char * gs_papertype;
+	int status;
 
 	if (strcmp(res, "1200") == 0) {
 		res = "1200x600";
 	}
 
-	for (size_t i = 0; papertype[i] != '\0'; i++){
-		papertype[i] = tolower(papertype[i]);
+	/*
+	 * Lowercase a private copy for Ghostscript's -sPAPERSIZE, since papertype
+	 * may point to a string literal (e.g. the CUPS filter path) or a value
+	 * the caller still needs in its original case for the PJL PAPER field.
+	 */
+	gs_papertype = malloc(strlen(papertype) + 1);
+	gurich_alloc_check(gs_papertype);
+	strcpy(gs_papertype, papertype);
+
+	for (size_t i = 0; gs_papertype[i] != '\0'; i++){
+		gs_papertype[i] = tolower(gs_papertype[i]);
 	}
 
 	snprintf(
 		gs_cmd,
 		250,
-		"/usr/bin/gs -sDEVICE=pbmraw -sOutputFile=%s%%03d-page.pbm "
+		"/usr/bin/env gs -sDEVICE=pbmraw -sOutputFile=%s%%03d-page.pbm "
 		"-r%s -dQUIET -dBATCH -dNOPAUSE -sPAPERSIZE=%s %s",
 		GURICH_TEMP_DIR,
 		res,
-		papertype,
+		gs_papertype,
 		psfile
 	);
 
@@ -53,5 +65,14 @@ void gurich_workaround_pbmgen(
 	fprintf(stderr, "DEBUG: gs_cmd %s\n", gs_cmd);
 	#endif
 
-	system(gs_cmd);
+	status = system(gs_cmd);
+
+	free(gs_papertype);
+
+	if (status == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+		fprintf(stderr, "ERROR: Ghostscript (%s) failed to convert the input to PBM.\n", psfile);
+		return false;
+	}
+
+	return true;
 }
