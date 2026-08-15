@@ -23,11 +23,8 @@
 #include <gurich.h>
 
 /*
- *
- * Needed in order to be able to copy data,
- * from a certain point in src.
- * Memcpy doesn't provide this functionality.
- *
+ * Appends len bytes from src (starting at srcbegin) to data,
+ * growing data's backing buffer as needed.
  */
 void data_modify(
 	struct gurich_transferdata *data,
@@ -35,15 +32,17 @@ void data_modify(
 	size_t len,
 	size_t srcbegin)
 {
-	size_t i, c;
+	char * resized;
 
-	data->data = realloc(data->data, (data->begin+len));
-	gurich_alloc_check(data->data);
-
-	for (i = data->begin, c = srcbegin; c < len+srcbegin; ++i, ++c) {
-		data->data[i] = src[c];
+	if (len == 0) {
+		return;
 	}
 
+	resized = realloc(data->data, data->begin + len);
+	gurich_alloc_check(resized);
+	data->data = resized;
+
+	memcpy(data->data + data->begin, src + srcbegin, len);
 	data->begin += len;
 }
 
@@ -95,11 +94,7 @@ void do_send_usb(
 		else
 			tsSize = totSize;
 
-		for (int i = tsStart, c = 0; c < tsSize; ++i, ++c)
-			tBuf[c] = usbdata->data[i];
-
-		tBuf[tsSize] = '\0';
-		//memcpy(tBuf, usbdata->data, tsSize);
+		memcpy(tBuf, usbdata->data + tsStart, tsSize);
 
 		libusb_bulk_transfer (g->device_handle, 0x01, tBuf, tsSize, &receivedLength, 5000);
 

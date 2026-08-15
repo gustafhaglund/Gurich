@@ -37,7 +37,10 @@ void gurich_prnt
 			return;
 	}
 
-	gurich_workaround_pbmgen(g, res, papertype, psfile);
+	if (!gurich_workaround_pbmgen(g, res, papertype, psfile)) {
+		fprintf(stderr, "ERROR: Ghostscript did not produce printable PBM data. Quitting.\n");
+		return;
+	}
 
 	struct gurich_jbg_st jbg;
 	struct gurich_pbm pbm;
@@ -63,13 +66,11 @@ void gurich_prnt
 	tme = localtime(&t);
 	strftime(datetime, sizeof(datetime), "%Y/%m/%d %H:%M:%S", tme);
 
-	sendbunker.data = malloc((beginlen = (100 + strlen(psfile))));
-	fs.files = malloc(10);
+	sendbunker.data = malloc((beginlen = (161 + strlen(username) + strlen(psfile))));
+	fs.files = NULL;
 
 	gurich_alloc_check(sendbunker.data);
 	gurich_alloc_set(sendbunker.data);
-	gurich_alloc_check(fs.files);
-	gurich_alloc_set(fs.files);
 
 	fsfiles = 0;
 
@@ -113,7 +114,11 @@ void gurich_prnt
 
 		if (pbmObj == NULL) {
 			fprintf(stderr, "DEBUG: Can't open the pbm file. Quitting.\n");
-			return;
+			for (size_t rem = fsl; rem < fsfiles; ++rem) {
+				unlink(fs.files[rem]);
+				free(fs.files[rem]);
+			}
+			goto cleanup;
 		}
 
 		jbg.jbig = malloc(1);
@@ -128,8 +133,11 @@ void gurich_prnt
 		{
 			fprintf(stderr, "CRIT: Something did happen with the JBIG image generation which this driver depend upon. Quitting.\n");
 			free(jbg.jbig);
-			unlink(fs.files[fsl]);
-			free(fs.files[fsl]);
+			fclose(pbmObj);
+			for (size_t rem = fsl; rem < fsfiles; ++rem) {
+				unlink(fs.files[rem]);
+				free(fs.files[rem]);
+			}
 			goto cleanup;
 		}
 

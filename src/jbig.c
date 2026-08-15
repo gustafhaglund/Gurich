@@ -24,17 +24,16 @@
 
 /* This file is largely based on source code from jbigkit, by Markus Kuhn. */
 
-static void jbg_out(unsigned char *jbgenc, size_t len, struct gurich_jbg_st *jbg)
+static void jbg_out(unsigned char *jbgenc, size_t len, void *context)
 {
-	size_t i, c;
+	struct gurich_jbg_st *jbg = context;
+	char * resized;
 
-	jbg->jbig = realloc(jbg->jbig, (jbg->jbiglen+len));
-	gurich_alloc_check(jbg->jbig);
+	resized = realloc(jbg->jbig, jbg->jbiglen + len);
+	gurich_alloc_check(resized);
+	jbg->jbig = resized;
 
-	for (i = jbg->jbiglen, c = 0; c < len; ++i, ++c) {
-		jbg->jbig[i] = jbgenc[c];
-	}
-
+	memcpy(jbg->jbig + jbg->jbiglen, jbgenc, len);
 	jbg->jbiglen += len;
 }
 
@@ -79,6 +78,7 @@ void gurich_jbg(FILE *pbmFp, struct gurich_pbm * pbm, struct gurich_jbg_st *jbg)
 	int dl = -1, dh = -1;
 
 	unsigned char **bitmap;
+	bitmap = NULL;
 	size_t bitmap_size;
 
 	/* read, get width, height and type */
@@ -103,9 +103,16 @@ void gurich_jbg(FILE *pbmFp, struct gurich_pbm * pbm, struct gurich_jbg_st *jbg)
 	bitmap_size = ((width+7) / 8) * (size_t)height;
 
 	bitmap = malloc(sizeof(unsigned char*) * encode_planes);
+	gurich_alloc_check(bitmap);
 	bitmap[0] = malloc(bitmap_size);
+	gurich_alloc_check(bitmap[0]);
 
-	fread(bitmap[0], bitmap_size, 1, pbmFp);
+	if (fread(bitmap[0], bitmap_size, 1, pbmFp) != 1) {
+		fprintf(stderr, "ERROR: Could not read the PBM bitmap payload. Quitting.\n");
+		free(bitmap[0]);
+		free(bitmap);
+		goto failure;
+	}
 
 	/* jbg lib */
 	jbg_enc_init(&s, width, height, encode_planes, bitmap, jbg_out, jbg);

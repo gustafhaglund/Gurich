@@ -98,33 +98,30 @@ static void nofilter_print(struct gurich_usb * g, int argc, char ** argv)
 static void cups_filter_print(struct gurich_usb * g, char ** argv)
 {
 	int psf;
-	char * ps;
 	char * res;
 	FILE * psfp;
-	size_t psbeg;
-	size_t pslen;
-	/*char * title;*/
-	size_t psread;
+	ssize_t psread;
 	char * copies;
 	char * username;
 	char * papertype;
 	char psbuf[8192];
 	char psfn[BUFSIZ];
-	/*char * additional;*/
-
-	psbeg = 0;
-	pslen = 0;
-	ps = malloc(8192);
-	gurich_alloc_check(ps);
-	gurich_alloc_set(ps);
 
 	psf = cupsTempFd(psfn, BUFSIZ);
+	if (psf < 0) {
+		fprintf(stderr, "ERROR: Could not create a CUPS temp file.\n");
+		return;
+	}
+
 	psfp = fdopen(psf, "wb+");
+	if (psfp == NULL) {
+		fprintf(stderr, "ERROR: Could not open the CUPS temp file: %s\n", strerror(errno));
+		close(psf);
+		return;
+	}
 
 	username = argv[2];
-	/*title = argv[3];*/
 	copies = argv[4];
-	/*additional = argv[5];*/
 	res = "600";
 	papertype = "A4";
 
@@ -134,29 +131,36 @@ static void cups_filter_print(struct gurich_usb * g, char ** argv)
 	 *
 	 */
 
-	while ((psread = read(0, psbuf, 8192)) > 0)
+	while ((psread = read(0, psbuf, sizeof(psbuf))) > 0)
 	{
-		ps = realloc(ps, pslen += psread);
-		gurich_alloc_check(ps);
-		for (size_t r = 0; r < psread; ++r, ++psbeg) {
-			ps[psbeg] = psbuf[r];
+		if (fwrite(psbuf, (size_t)psread, 1, psfp) != 1) {
+			fprintf(stderr, "ERROR: Could not write PostScript input to the CUPS temp file.\n");
+			fclose(psfp);
+			unlink(psfn);
+			return;
 		}
 	}
 
-	fwrite(ps, pslen, 1, psfp);
-	fclose(psfp);
+	if (psread < 0) {
+		fprintf(stderr, "ERROR: Could not read PostScript input: %s\n", strerror(errno));
+		fclose(psfp);
+		unlink(psfn);
+		return;
+	}
 
-	free(ps);
+	fclose(psfp);
 
 	if (!gurich_dir_checkup()) {
 		fprintf(
 			stderr,
 			"ERROR: Quitting, since this driver stumbled over an unknown directory management error.\n"
 		);
+		unlink(psfn);
 		return;
 	}
 
 	gurich_prnt(g, username, res, psfn, copies, papertype, true);
+	unlink(psfn);
 }
 
 int main(int argc, char ** argv)
