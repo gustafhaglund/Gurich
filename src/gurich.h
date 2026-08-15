@@ -82,19 +82,23 @@ struct gurich_pbm {
 	unsigned long height;
 };
 
-struct gurich_files {
-	char **files;
-};
-
 /*
- * A growable byte buffer. cap tracks the allocation so appends amortise to
- * O(1); without it, every append reallocated to the exact new size, which
- * made building a job quadratic in its own size.
+ * A growable byte buffer holding one whole job.
+ *
+ * The job is assembled in full before any of it is sent, which is what makes
+ * a failure part-way through harmless: a page that fails to encode aborts
+ * the job with nothing printed, rather than leaving half a document in the
+ * printer. That is worth the memory on the host -- a dense 50 page job
+ * measures around 21 MB.
+ *
+ * Growth is left to realloc(). Tracking capacity and doubling was measured
+ * against exact-fit realloc from 1 MB to 256 MB and the difference was noise
+ * at every size, because glibc grows large blocks with mremap() rather than
+ * by copying.
  */
 struct gurich_transferdata {
 	char *data;
 	size_t len;
-	size_t cap;
 };
 
 /* General functions */
@@ -104,7 +108,7 @@ if (a == NULL) { \
 	exit(-1); \
 }
 
-size_t gurich_pbm_pages(const char *path, struct gurich_files * fs);
+void gurich_page_path(char * buf, size_t size, const char * dir, size_t page);
 
 bool gurich_tempdir(char * out, size_t outlen);
 

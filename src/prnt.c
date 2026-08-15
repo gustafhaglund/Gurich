@@ -34,18 +34,17 @@ void gurich_prnt
 ) {
 	struct gurich_jbg_st jbg;
 	struct gurich_pbm pbm;
-	struct gurich_files fs = { NULL };
-	struct gurich_transferdata sendbunker = { NULL, 0, 0 };
+	struct gurich_transferdata sendbunker = { NULL, 0 };
 
 	struct tm * tme;
 	time_t t;
 	char datetime[32 + 1];
 	char tempdir[256];
+	char pagepath[320];
 
 	FILE *pbmObj;
 
-	size_t fsfiles = 0;
-	size_t fsl = 0;
+	size_t page = 1;
 
 	if (!cupsfilter) {
 		if (!check_printer_status(g))
@@ -64,12 +63,6 @@ void gurich_prnt
 	t = time(NULL);
 	tme = localtime(&t);
 	strftime(datetime, sizeof(datetime), "%Y/%m/%d %H:%M:%S", tme);
-
-	fsfiles = gurich_pbm_pages(tempdir, &fs);
-	if (fsfiles == 0) {
-		fprintf(stderr, "ERROR: Ghostscript produced no pages. Quitting.\n");
-		goto cleanup;
-	}
 
 	data_printf(
 		&sendbunker,
@@ -90,21 +83,24 @@ void gurich_prnt
 		PRINTER_STANDARD_HOLD
 	);
 
-	for (fsl = 0; fsl < fsfiles; ++fsl)
+	/* Ghostscript numbers pages consecutively from 1, so walking the names
+	 * until one is missing both counts the pages and orders them. */
+	for (page = 1; ; ++page)
 	{
 		size_t sent;
 
+		gurich_page_path(pagepath, sizeof(pagepath), tempdir, page);
+
+		pbmObj = fopen(pagepath, "rb");
+		if (pbmObj == NULL) {
+			break;
+		}
+
 		#ifdef _DEBUG
-		fprintf(stderr, "DEBUG: %s\n", fs.files[fsl]);
+		fprintf(stderr, "DEBUG: %s\n", pagepath);
 		#endif
 
-		fprintf(stderr, "INFO: Preparing page %zu\n", fsl+1);
-
-		pbmObj = fopen(fs.files[fsl], "rb");
-		if (pbmObj == NULL) {
-			fprintf(stderr, "ERROR: Can't open the pbm file. Quitting.\n");
-			goto cleanup;
-		}
+		fprintf(stderr, "INFO: Preparing page %zu\n", page);
 
 		jbg.jbig = NULL;
 		jbg.jbiglen = 0;
@@ -163,9 +159,12 @@ void gurich_prnt
 		data_append(&sendbunker, PRINTER_PAGE_END, strlen(PRINTER_PAGE_END));
 
 		free(jbg.jbig);
+		unlink(pagepath);
+	}
 
-		unlink(fs.files[fsl]);
-		free(fs.files[fsl]);
+	if (page == 1) {
+		fprintf(stderr, "ERROR: Ghostscript produced no pages. Quitting.\n");
+		goto cleanup;
 	}
 
 	data_append(&sendbunker, PRINTER_END, strlen(PRINTER_END));
@@ -188,14 +187,17 @@ void gurich_prnt
 	}
 
 	cleanup:
-		/* On the normal path fsl == fsfiles and this loop does nothing;
-		 * on an early exit it clears whatever pages are still pending. */
-		for (; fsl < fsfiles; ++fsl) {
-			unlink(fs.files[fsl]);
-			free(fs.files[fsl]);
+		/* Pages are unlinked as they are consumed, so only the current one
+		 * and any that follow it can still be here. On the normal path the
+		 * first unlink fails at once and the loop ends. */
+		for (;; ++page) {
+			gurich_page_path(pagepath, sizeof(pagepath), tempdir, page);
+
+			if (unlink(pagepath) != 0) {
+				break;
+			}
 		}
 
-		free(fs.files);
 		free(sendbunker.data);
 		rmdir(tempdir);
 }

@@ -22,27 +22,15 @@
 
 #include <gurich.h>
 
-/* Makes room for extra bytes past data->len, doubling rather than fitting
- * exactly so that a job costs O(size) to assemble instead of O(size^2). */
-static void data_reserve(struct gurich_transferdata *data, size_t extra)
+/* Grows the buffer by extra bytes and returns where to write them. */
+static char * data_room(struct gurich_transferdata *data, size_t extra)
 {
-	char * resized;
-	size_t want = data->len + extra;
+	char * resized = realloc(data->data, data->len + extra);
 
-	if (want <= data->cap) {
-		return;
-	}
-
-	if (data->cap == 0) {
-		data->cap = 8192;
-	}
-	while (data->cap < want) {
-		data->cap *= 2;
-	}
-
-	resized = realloc(data->data, data->cap);
 	gurich_alloc_check(resized);
 	data->data = resized;
+
+	return resized + data->len;
 }
 
 void data_append(
@@ -54,8 +42,7 @@ void data_append(
 		return;
 	}
 
-	data_reserve(data, len);
-	memcpy(data->data + data->len, src, len);
+	memcpy(data_room(data, len), src, len);
 	data->len += len;
 }
 
@@ -73,8 +60,7 @@ void data_printf(struct gurich_transferdata *data, const char *fmt, ...)
 	if (need > 0) {
 		/* +1 for the NUL vsnprintf insists on writing; len excludes it, so
 		 * the next append overwrites it. */
-		data_reserve(data, (size_t)need + 1);
-		vsnprintf(data->data + data->len, (size_t)need + 1, fmt, apc);
+		vsnprintf(data_room(data, (size_t)need + 1), (size_t)need + 1, fmt, apc);
 		data->len += (size_t)need;
 	}
 

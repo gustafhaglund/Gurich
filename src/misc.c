@@ -22,48 +22,17 @@
 
 #include <gurich.h>
 
-static int gurich_is_pbm(const struct dirent *d)
-{
-	const char *dot = strrchr(d->d_name, '.');
-	return dot != NULL && strcmp(dot, ".pbm") == 0;
-}
-
 /*
- * Collects the job's pages, in page order.
+ * Builds the name Ghostscript was told to write page n to.
  *
- * Ghostscript names them 001-page.pbm, 002-page.pbm and so on, but readdir()
- * hands them back in directory order, which on ext4/btrfs is hash order --
- * a twelve page document came out as 6,10,11,9,7,1,2,4,5,8,12,3. alphasort
- * both fixes that and replaces the hand-rolled growable array this used to
- * carry.
+ * The driver passes gs -sOutputFile=<dir>%03d-page.pbm, so the names are
+ * already known and pages can simply be walked 1, 2, 3 ... until one is
+ * missing. Listing the directory instead was what put pages in the wrong
+ * order, because readdir() returns hash order, not name order.
  */
-size_t gurich_pbm_pages(const char *path, struct gurich_files * fs)
+void gurich_page_path(char * buf, size_t size, const char * dir, size_t page)
 {
-	struct dirent **names;
-	int n;
-
-	fs->files = NULL;
-
-	n = scandir(path, &names, gurich_is_pbm, alphasort);
-	if (n <= 0) {
-		return 0;
-	}
-
-	fs->files = malloc((size_t)n * sizeof(char *));
-	gurich_alloc_check(fs->files);
-
-	for (int i = 0; i < n; ++i) {
-		size_t len = strlen(path) + strlen(names[i]->d_name) + 1;
-
-		fs->files[i] = malloc(len);
-		gurich_alloc_check(fs->files[i]);
-		snprintf(fs->files[i], len, "%s%s", path, names[i]->d_name);
-
-		free(names[i]);
-	}
-	free(names);
-
-	return (size_t)n;
+	snprintf(buf, size, "%s%03zu-page.pbm", dir, page);
 }
 
 /*
