@@ -57,26 +57,22 @@ static void display_usage(const char * exec, bool cpr)
 #ifndef _NO_USB
 static void display_status(struct gurich_usb * g)
 {
-	struct gurich_status data;
-	unsigned int ink;
-	unsigned int pr;
-	char inkstr[75];
+	struct gurich_status data = gurich_status(g);
+	int ink = gurich_toner(g);
 
-	data = gurich_status(g);
-	ink = gurich_toner(g);
-	pr = gurich_printed(g);
+	printf("Printer status: %s, reference: 0x%x\n", data.status, data.ref);
 
-	snprintf(
-		inkstr,
-		75,
-		"Printer toner: %d %% left %s",
-		ink,
-		(ink <= 10 ? "- please consider buying more toner" : "")
-	);
+	if (ink < 0) {
+		puts("Printer toner: unknown (the printer did not answer)");
+	} else {
+		printf(
+			"Printer toner: %d %% left %s\n",
+			ink,
+			(ink <= 10 ? "- please consider buying more toner" : "")
+		);
+	}
 
-	printf("Printer status: %s, reference: 0x%hx\n", data.status, data.ref);
-	puts(inkstr);
-	printf("Printed out pages (stats): %d\n", pr);
+	printf("Printed out pages (stats): %zu\n", gurich_printed(g));
 }
 #endif
 
@@ -87,15 +83,10 @@ static void nofilter_print(struct gurich_usb * g, int argc, char ** argv)
 		return;
 	}
 
-	if (!gurich_dir_checkup()) {
-		fprintf(stderr, "This driver stumbled over an unknown directory management error. Quitting.\n");
-		return;
-	}
-
 	gurich_prnt(g, get_username(), argv[3], argv[2], argv[4], argv[5], false);
 }
 
-static void cups_filter_print(struct gurich_usb * g, char ** argv)
+static void cups_filter_print(struct gurich_usb * g, int argc, char ** argv)
 {
 	int psf;
 	char * res;
@@ -106,6 +97,12 @@ static void cups_filter_print(struct gurich_usb * g, char ** argv)
 	char * papertype;
 	char psbuf[8192];
 	char psfn[BUFSIZ];
+
+	/* CUPS calls a filter as: job user title copies options [file] */
+	if (argc < 6) {
+		fprintf(stderr, "ERROR: Not enough arguments for a CUPS filter. Quitting.\n");
+		return;
+	}
 
 	psf = cupsTempFd(psfn, BUFSIZ);
 	if (psf < 0) {
@@ -150,15 +147,6 @@ static void cups_filter_print(struct gurich_usb * g, char ** argv)
 
 	fclose(psfp);
 
-	if (!gurich_dir_checkup()) {
-		fprintf(
-			stderr,
-			"ERROR: Quitting, since this driver stumbled over an unknown directory management error.\n"
-		);
-		unlink(psfn);
-		return;
-	}
-
 	gurich_prnt(g, username, res, psfn, copies, papertype, true);
 	unlink(psfn);
 }
@@ -179,6 +167,14 @@ int main(int argc, char ** argv)
 	if (arg[0] == '-')
 	{
 		init_msg();
+
+		/* Usage text is answered before probing USB: needing the printer
+		 * plugged in just to read the help was never useful. */
+		if (arg[1] == 'h' || arg[1] == '\0') {
+			display_usage(argv[0], false);
+			puts("");
+			return 0;
+		}
 
 		#ifndef _NO_USB
 		check_printer_usb(&g);
@@ -202,16 +198,13 @@ int main(int argc, char ** argv)
 				gurich_testpage(&g);
 				break;
 			#endif
-			case 'h':
-				display_usage(argv[0], false);
-				break;
 			default:
 				display_usage(argv[0], false);
 		}
 
 		puts("");
 	} else {
-		cups_filter_print(&g, argv);
+		cups_filter_print(&g, argc, argv);
 	}
 
 	cleanup_usb(&g);

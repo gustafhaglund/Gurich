@@ -22,88 +22,143 @@
 
 #include <gurich.h>
 
-/*
- * Appends len bytes from src (starting at srcbegin) to data,
- * growing data's backing buffer as needed.
- */
-void data_modify(
-	struct gurich_transferdata *data,
-	const char *src,
-	size_t len,
-	size_t srcbegin)
+/* Makes room for extra bytes past data->len, doubling rather than fitting
+ * exactly so that a job costs O(size) to assemble instead of O(size^2). */
+static void data_reserve(struct gurich_transferdata *data, size_t extra)
 {
 	char * resized;
+	size_t want = data->len + extra;
 
+	if (want <= data->cap) {
+		return;
+	}
+
+	if (data->cap == 0) {
+		data->cap = 8192;
+	}
+	while (data->cap < want) {
+		data->cap *= 2;
+	}
+
+	resized = realloc(data->data, data->cap);
+	gurich_alloc_check(resized);
+	data->data = resized;
+}
+
+void data_append(
+	struct gurich_transferdata *data,
+	const char *src,
+	size_t len)
+{
 	if (len == 0) {
 		return;
 	}
 
-	resized = realloc(data->data, data->begin + len);
-	gurich_alloc_check(resized);
-	data->data = resized;
+	data_reserve(data, len);
+	memcpy(data->data + data->len, src, len);
+	data->len += len;
+}
 
-	memcpy(data->data + data->begin, src + srcbegin, len);
-	data->begin += len;
+void data_printf(struct gurich_transferdata *data, const char *fmt, ...)
+{
+	va_list ap, apc;
+	int need;
+
+	va_start(ap, fmt);
+	va_copy(apc, ap);
+
+	need = vsnprintf(NULL, 0, fmt, ap);
+	va_end(ap);
+
+	if (need > 0) {
+		/* +1 for the NUL vsnprintf insists on writing; len excludes it, so
+		 * the next append overwrites it. */
+		data_reserve(data, (size_t)need + 1);
+		vsnprintf(data->data + data->len, (size_t)need + 1, fmt, apc);
+		data->len += (size_t)need;
+	}
+
+	va_end(apc);
 }
 
 bool check_printer_status(struct gurich_usb * g)
 {
 	#ifndef _NO_USB
 	struct gurich_status data = gurich_status(g);
+	int toner;
 
-	if (strcmp((char*)data.status, "BAD") == 0) {
+	/*
+	 * There is deliberately no "already printing" check. gurich_status()
+	 * reports 0x33 as "PRINTING / WARMING UP" -- the two are the same code,
+	 * so refusing on it would reject jobs sent to a printer that is merely
+	 * warming up, which is the normal state after idle.
+	 */
+	if (data.ref == PRINTER_STATUS_BAD) {
 		fprintf(stderr, "ERROR: Please read the manual and check out the printer (bad state reported). Quitting.\n");
 		return false;
-	} else if (strcmp((char*)data.status, "PRINTING") == 0) {
-		fprintf(stderr, "ERROR: Your printer is already printing. Quitting.\n");
-		return false;
-	} else if (gurich_toner(g) == 0) {
+	}
+
+	toner = gurich_toner(g);
+	if (toner == 0) {
 		fprintf(stderr, "ERROR: Not sufficient level of toner (0%% left of toner). Quitting.\n");
 		return false;
 	}
+	/* toner < 0 means the query failed; that is not a reason to refuse a job. */
+	#else
+	(void)g;
 	#endif
 
 	return true;
 }
 
-void do_send_usb(
+bool do_send_usb(
 	struct gurich_usb * g,
 	struct gurich_transferdata * usbdata)
 {
 	#ifndef _NO_USB
+	size_t sent;
+
 	if (g->initialized == false) {
-		return;
+		return false;
 	}
 
-	size_t totSize;
-	size_t tsSize;
-	size_t tsStart;
-	int receivedLength;
-
-	totSize = usbdata->begin, tsSize = 0, tsStart = 0;
-	receivedLength = 0;
-
-	//fprintf(stderr, "DEBUG: %lu totSize\n", totSize);
-
-	while (totSize != 0)
+	for (sent = 0; sent < usbdata->len; )
 	{
-		unsigned char tBuf[4096];
+		size_t remaining = usbdata->len - sent;
+		int chunk = (int)(remaining > PRINTER_USB_CHUNK ? PRINTER_USB_CHUNK : remaining);
+		int transferred = 0;
+		int err;
 
-		if (totSize > 4096)
-			tsSize = 4096;
-		else
-			tsSize = totSize;
+		/* libusb reads straight from our buffer, so there is nothing to be
+		 * gained by staging the chunk in a scratch array first. */
+		err = libusb_bulk_transfer(
+			g->device_handle, 0x01,
+			(unsigned char *)usbdata->data + sent,
+			chunk, &transferred, 5000);
 
-		memcpy(tBuf, usbdata->data + tsStart, tsSize);
-
-		libusb_bulk_transfer (g->device_handle, 0x01, tBuf, tsSize, &receivedLength, 5000);
+		if (err != 0) {
+			fprintf(
+				stderr,
+				"ERROR: Sending to the printer failed after %zu of %zu bytes (%s). Quitting.\n",
+				sent, usbdata->len, libusb_error_name(err)
+			);
+			return false;
+		}
 
 		#ifdef _DEBUG
-			printf ("receivedLength: %d, tsStart: %zu, totSize: %zu, tsSize %zu\n", receivedLength, tsStart, totSize, tsSize);
+			printf("transferred: %d, sent: %zu, total: %zu\n", transferred, sent, usbdata->len);
 		#endif
 
-		tsStart += tsSize;
-		totSize -= tsSize;
+		sent += (size_t)transferred;
+
+		if (transferred == 0) {
+			fprintf(stderr, "ERROR: The printer stopped accepting data. Quitting.\n");
+			return false;
+		}
 	}
+	#else
+	(void)g; (void)usbdata;
 	#endif
+
+	return true;
 }

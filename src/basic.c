@@ -65,8 +65,7 @@ static unsigned int gurich_find_printer_interface(libusb_device * device)
 
 static void printer_usb(struct gurich_usb * g, struct libusb_device_descriptor devdesc)
 {
-	char libusb_strerror[128];
-	int libusb_error;
+	int libusb_error = 0;
 
 	libusb_set_debug(g->ctx, PRINTER_LIBUSB_DEBUG);
 
@@ -74,8 +73,18 @@ static void printer_usb(struct gurich_usb * g, struct libusb_device_descriptor d
 	g->iSerialNumber = devdesc.iSerialNumber;
 	g->device_handle = libusb_open_device_with_vid_pid(g->ctx, PRINTER_VENDOR_ID, devdesc.idProduct);
 
+	/*
+	 * Opening fails routinely when the user lacks permission on the device
+	 * node, so this path has to stay clean: there is no handle to close and
+	 * no libusb error code to name.
+	 */
 	if (g->device_handle == NULL) {
-		goto libusb_fail;
+		fprintf(
+			stderr,
+			"Found a Ricoh printer but could not open it. Check permissions on the USB device (udev rule), or whether another program holds it.\n\n"
+		);
+		libusb_exit(g->ctx);
+		return;
 	}
 
 	g->device = libusb_get_device(g->device_handle);
@@ -97,18 +106,14 @@ static void printer_usb(struct gurich_usb * g, struct libusb_device_descriptor d
 	return;
 
 	libusb_fail:
-		snprintf(libusb_strerror, 128, "ERROR: %s", libusb_error_name(libusb_error));
-
-		/*
-		libusb_release_interface(g->device_handle, GURICH_USB_INTERFACE);
-		libusb_attach_kernel_driver(g->device_handle, GURICH_USB_INTERFACE);
-		libusb_close(g->device_handle);
-		*/
-
 		libusb_close(g->device_handle);
 		libusb_exit(g->ctx);
 
-		fprintf(stderr, "Something went wrong with libusb (%s). Quitting.\n\n", libusb_strerror);
+		fprintf(
+			stderr,
+			"Something went wrong with libusb (%s). Quitting.\n\n",
+			libusb_error_name(libusb_error)
+		);
 }
 #endif
 

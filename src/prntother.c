@@ -22,37 +22,54 @@
 
 #include <gurich.h>
 
+/*
+ * These queries all read a fixed offset out of the reply. The buffers are
+ * zeroed and the transfer length checked, because a failed control transfer
+ * otherwise leaves us reading uninitialised stack -- which for the toner
+ * query could produce a bogus "0%% toner" and refuse a perfectly good job.
+ */
+static bool gurich_query(struct gurich_usb * g, uint8_t request,
+	unsigned char * buf, int len, int need)
+{
+	int got;
+
+	memset(buf, 0, (size_t)len);
+	got = libusb_control_transfer(g->device_handle, 0xc1, request, 0x00, 0, buf, (uint16_t)len, 5000);
+
+	return got >= need;
+}
+
 struct gurich_status gurich_status(struct gurich_usb * g)
 {
 	struct gurich_status stat;
 	unsigned char statusbuf[1024];
 
-	libusb_control_transfer(g->device_handle, 0xc1, 9, 0x00, 0, statusbuf, 1024, 5000);
+	if (!gurich_query(g, 9, statusbuf, sizeof(statusbuf), 11)) {
+		stat.ref = -1;
+		stat.status = "UNKNOWN (could not query the printer)";
+		return stat;
+	}
 
-	stat.state = 0;
 	stat.ref = statusbuf[10];
-
-	/* stat.state is currently unused. */
 
 	switch (statusbuf[10])
 	{
-		case 0x35:
+		case PRINTER_STATUS_BAD:
 			stat.status = "BAD";
-			stat.state = 1;
 			break;
-		case 0x30:
+		case PRINTER_STATUS_ENERGY_SAVING:
 			stat.status = "ENERGY SAVING MODE 1";
 			break;
-		case 0x31:
+		case PRINTER_STATUS_IDLE:
 			stat.status = "GOOD / ENERGY SAVING MODE 2 / IDLE";
 			break;
-		case 0x37:
+		case PRINTER_STATUS_PREPARING:
 			stat.status = "PREPARING / RELAXING (UNKNOWN?)";
 			break;
-		case 0x33:
+		case PRINTER_STATUS_PRINTING:
 			stat.status = "PRINTING / WARMING UP";
 			break;
-		case 0x32:
+		case PRINTER_STATUS_RETURNING_IDLE:
 			stat.status = "GOING BACK TO IDLE (UNKNOWN?)";
 			break;
 		default:
@@ -62,17 +79,24 @@ struct gurich_status gurich_status(struct gurich_usb * g)
 	return stat;
 }
 
-unsigned short int gurich_toner(struct gurich_usb * g)
+int gurich_toner(struct gurich_usb * g)
 {
 	unsigned char tonerbuf[1024];
-	libusb_control_transfer(g->device_handle, 0xc1, 149, 0x00, 0, tonerbuf, 1024, 5000);
+
+	if (!gurich_query(g, 149, tonerbuf, sizeof(tonerbuf), 7)) {
+		return -1;
+	}
+
 	return tonerbuf[6] * 10;
 }
 
 size_t gurich_printed(struct gurich_usb * g)
 {
 	unsigned char prbuf[1024];
-	libusb_control_transfer (g->device_handle, 0xc1, 193, 0x00, 0, prbuf, 1024 /* formely 6 */, 5000);
+
+	if (!gurich_query(g, 193, prbuf, sizeof(prbuf), 62)) {
+		return 0;
+	}
 
 	if (prbuf[25] == 0x00) {
 		return prbuf[24] + 15;

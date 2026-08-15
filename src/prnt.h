@@ -33,14 +33,27 @@
 /* AUTO / TRAY1 */
 #define PRINTER_STANDARD_COVER			"OFF"
 #define PRINTER_STANDARD_HOLD			"OFF"
-#define PRINTER_STANDARD_RESOLUTION		"600"
 
 #define PRINTER_START	0x1b, 0x25, 0x2d, 0x31, 0x32, 0x33, 0x34, 0x35, 0x58, 0x40, 0x50, 0x4a, 0x4c, 0x0d, 0x0a
 #define PRINTER_START_FORMAT "%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c"
 #define PRINTER_PAGE_END "@PJL SET DOTCOUNT=10\r\n@PJL SET PAGESTATUS=END\r\n"
 #define PRINTER_END	"@PJL EOJ\r\n%-12345X\r\n"
 
-#define PRINTER_PBM_DIR "temp/pbm/"
-#define PRINTER_PBM_DIRLEN 9
+/* Status byte reported at offset 10 of the status control transfer.
+ * Note that PRINTING and WARMING UP share a code, so it cannot be used
+ * to tell a busy printer from one that has just woken up. */
+#define PRINTER_STATUS_ENERGY_SAVING  0x30
+#define PRINTER_STATUS_IDLE           0x31
+#define PRINTER_STATUS_RETURNING_IDLE 0x32
+#define PRINTER_STATUS_PRINTING       0x33
+#define PRINTER_STATUS_BAD            0x35
+#define PRINTER_STATUS_PREPARING      0x37
+
+/* Largest JBIG payload the printer accepts under one IMAGELEN header.
+ * Taken from USB captures of the vendor driver. */
+#define PRINTER_MAX_IMAGELEN 65556
+
+/* Chunk size for bulk transfers to the printer. */
+#define PRINTER_USB_CHUNK 4096
 
 #endif

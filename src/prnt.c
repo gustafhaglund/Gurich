@@ -26,63 +26,53 @@ void gurich_prnt
 (
 	struct gurich_usb * g,
 	const char * username,
-	const char *res,
-	char * psfile,
+	const char * res,
+	const char * psfile,
 	const char * copies,
-	char * papertype,
+	const char * papertype,
 	bool cupsfilter
 ) {
+	struct gurich_jbg_st jbg;
+	struct gurich_pbm pbm;
+	struct gurich_files fs = { NULL };
+	struct gurich_transferdata sendbunker = { NULL, 0, 0 };
+
+	struct tm * tme;
+	time_t t;
+	char datetime[32 + 1];
+	char tempdir[256];
+
+	FILE *pbmObj;
+
+	size_t fsfiles = 0;
+	size_t fsl = 0;
+
 	if (!cupsfilter) {
 		if (!check_printer_status(g))
 			return;
 	}
 
-	if (!gurich_workaround_pbmgen(g, res, papertype, psfile)) {
-		fprintf(stderr, "ERROR: Ghostscript did not produce printable PBM data. Quitting.\n");
+	if (!gurich_tempdir(tempdir, sizeof(tempdir))) {
 		return;
 	}
 
-	struct gurich_jbg_st jbg;
-	struct gurich_pbm pbm;
-	struct gurich_files fs;
-	struct gurich_transferdata sendbunker;
-
-	struct tm * tme;
-	time_t t;
-	char datetime[32 + 1];
-
-	FILE *pbmObj;
-
-	char page[250];
-
-	size_t beginlen;
-	size_t fsfiles;
-	size_t fsl;
-
-	size_t jbigbegin;
-	size_t jbigSize;
+	if (!gurich_workaround_pbmgen(tempdir, res, papertype, psfile)) {
+		fprintf(stderr, "ERROR: Ghostscript did not produce printable PBM data. Quitting.\n");
+		goto cleanup;
+	}
 
 	t = time(NULL);
 	tme = localtime(&t);
 	strftime(datetime, sizeof(datetime), "%Y/%m/%d %H:%M:%S", tme);
 
-	sendbunker.data = malloc((beginlen = (161 + strlen(username) + strlen(psfile))));
-	fs.files = NULL;
+	fsfiles = gurich_pbm_pages(tempdir, &fs);
+	if (fsfiles == 0) {
+		fprintf(stderr, "ERROR: Ghostscript produced no pages. Quitting.\n");
+		goto cleanup;
+	}
 
-	gurich_alloc_check(sendbunker.data);
-	gurich_alloc_set(sendbunker.data);
-
-	fsfiles = 0;
-
-	jbigbegin = 0;
-	jbigSize = 0;
-
-	fsfiles = gurich_dirent_fs(GURICH_TEMP_DIR, &fs, "pbm");
-	if (fsfiles == 0) goto cleanup;
-
-	snprintf(
-		sendbunker.data,
-		beginlen,
+	data_printf(
+		&sendbunker,
 
 		PRINTER_START_FORMAT \
 		"@PJL SET TIMESTAMP=%s\r\n" \
@@ -100,54 +90,37 @@ void gurich_prnt
 		PRINTER_STANDARD_HOLD
 	);
 
-	sendbunker.begin = strlen(sendbunker.data);
-
 	for (fsl = 0; fsl < fsfiles; ++fsl)
 	{
-		pbmObj = fopen(fs.files[fsl], "rb");
+		size_t sent;
 
 		#ifdef _DEBUG
 		fprintf(stderr, "DEBUG: %s\n", fs.files[fsl]);
 		#endif
 
-		fprintf(stderr, "INFO: Preparing page %lu\n", fsl+1);
+		fprintf(stderr, "INFO: Preparing page %zu\n", fsl+1);
 
+		pbmObj = fopen(fs.files[fsl], "rb");
 		if (pbmObj == NULL) {
-			fprintf(stderr, "DEBUG: Can't open the pbm file. Quitting.\n");
-			for (size_t rem = fsl; rem < fsfiles; ++rem) {
-				unlink(fs.files[rem]);
-				free(fs.files[rem]);
-			}
+			fprintf(stderr, "ERROR: Can't open the pbm file. Quitting.\n");
 			goto cleanup;
 		}
 
-		jbg.jbig = malloc(1);
+		jbg.jbig = NULL;
 		jbg.jbiglen = 0;
 
-		gurich_alloc_check(jbg.jbig);
-		gurich_alloc_set(jbg.jbig);
-
 		gurich_jbg(pbmObj, &pbm, &jbg);
+		fclose(pbmObj);
 
 		if (jbg.jbiglen == 0)
 		{
 			fprintf(stderr, "CRIT: Something did happen with the JBIG image generation which this driver depend upon. Quitting.\n");
 			free(jbg.jbig);
-			fclose(pbmObj);
-			for (size_t rem = fsl; rem < fsfiles; ++rem) {
-				unlink(fs.files[rem]);
-				free(fs.files[rem]);
-			}
 			goto cleanup;
 		}
 
-		fclose(pbmObj);
-
-		/* Sending preparation... */
-
-		snprintf(
-			page,
-			250,
+		data_printf(
+			&sendbunker,
 
 			"@PJL SET PAGESTATUS=START\r\n" \
 			"@PJL SET COPIES=%s\r\n" \
@@ -165,56 +138,45 @@ void gurich_prnt
 			pbm.width,
 			pbm.height,
 			res,
-			(jbg.jbiglen > 65556 ? 65556 : jbg.jbiglen)
+			(jbg.jbiglen > PRINTER_MAX_IMAGELEN ? (size_t)PRINTER_MAX_IMAGELEN : jbg.jbiglen)
 		);
 
-		data_modify(&sendbunker, page, strlen(page), 0);
-
-		while (jbg.jbiglen != 0)
+		/* The payload goes out in IMAGELEN-sized runs, each one but the
+		 * first preceded by its own IMAGELEN header. */
+		for (sent = 0; sent < jbg.jbiglen; )
 		{
-			char imglen[50];
+			size_t remaining = jbg.jbiglen - sent;
+			size_t chunk = remaining > PRINTER_MAX_IMAGELEN ? (size_t)PRINTER_MAX_IMAGELEN : remaining;
 
-			if (jbg.jbiglen > 65556) {
-				jbigSize = 65556;
-			} else {
-				jbigSize = jbg.jbiglen;
-			}
+			data_append(&sendbunker, jbg.jbig + sent, chunk);
+			sent += chunk;
 
-			data_modify(&sendbunker, jbg.jbig, jbigSize, jbigbegin);
-
-			jbigbegin += jbigSize;
-			jbg.jbiglen -= jbigSize;
-			jbigSize = (jbg.jbiglen > 65556 ? 65556 : jbg.jbiglen);
-
-			/* If it's more in the jbig buffer, then do a mark (and later copy the buffer portion to sendbunker).
-			 * jbigSize in this context could be called remainingLen.
-			*/
-			if (jbigSize > 0) {
-				snprintf(imglen, 50, "@PJL SET IMAGELEN=%zu\r\n", jbigSize);
-				/* Limits to max 30 numbers incl. PJL-text and ending characters. */
-				data_modify(&sendbunker, imglen, strlen(imglen), 0);
+			remaining = jbg.jbiglen - sent;
+			if (remaining > 0) {
+				data_printf(
+					&sendbunker, "@PJL SET IMAGELEN=%zu\r\n",
+					remaining > PRINTER_MAX_IMAGELEN ? (size_t)PRINTER_MAX_IMAGELEN : remaining
+				);
 			}
 		}
 
-		data_modify(&sendbunker, PRINTER_PAGE_END, strlen(PRINTER_PAGE_END), 0);
+		data_append(&sendbunker, PRINTER_PAGE_END, strlen(PRINTER_PAGE_END));
 
-		jbigbegin = 0;
+		free(jbg.jbig);
 
-		/* Clean up. */
 		unlink(fs.files[fsl]);
 		free(fs.files[fsl]);
-		free(jbg.jbig);
 	}
 
-	if (fsfiles > 0) {
-		data_modify(&sendbunker, PRINTER_END, strlen(PRINTER_END), 0);
-	}
+	data_append(&sendbunker, PRINTER_END, strlen(PRINTER_END));
 
 	#ifdef _DEBUG
 	if (!cupsfilter) {
-		FILE * f = fopen(GURICH_TEMP_DIR"pjl.bin", "w+");
-		fwrite(sendbunker.data, sendbunker.begin, 1, f);
-		fclose(f);
+		FILE * f = fopen("/tmp/gurich-pjl.bin", "w+");
+		if (f != NULL) {
+			fwrite(sendbunker.data, sendbunker.len, 1, f);
+			fclose(f);
+		}
 	}
 	#endif
 
@@ -222,12 +184,18 @@ void gurich_prnt
 	if (!cupsfilter) {
 		do_send_usb(g, &sendbunker);
 	} else {
-		fwrite(sendbunker.data, sendbunker.begin, 1, stdout);
+		fwrite(sendbunker.data, sendbunker.len, 1, stdout);
 	}
 
 	cleanup:
-		free(sendbunker.data);
+		/* On the normal path fsl == fsfiles and this loop does nothing;
+		 * on an early exit it clears whatever pages are still pending. */
+		for (; fsl < fsfiles; ++fsl) {
+			unlink(fs.files[fsl]);
+			free(fs.files[fsl]);
+		}
 
-		if (fsfiles > 0)
-			free(fs.files);
+		free(fs.files);
+		free(sendbunker.data);
+		rmdir(tempdir);
 }

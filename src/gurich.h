@@ -30,6 +30,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <time.h>
 
 #include <sys/types.h>
@@ -46,18 +47,14 @@
 
 #include <prnt.h>
 
-#ifndef GURICH_TEMP_DIR
-	#define GURICH_TEMP_DIR "/tmp/gurich/"
-#endif
-
-#ifndef GURICH_TEMP_DIR_PERMISSION
-	#define GURICH_TEMP_DIR_PERMISSION 0777
-	//0666
-#endif
-
-#ifndef _D_EXACT_NAMLEN
-	/* For BSD systems. */
-	#define _D_EXACT_NAMLEN(d) strlen((d)->d_name)
+/*
+ * Each job gets its own directory, created by mkdtemp() with 0700
+ * permissions. A shared fixed path would let concurrent jobs consume each
+ * other's pages, and would leave a killed job's pages behind for the next
+ * job to pick up.
+ */
+#ifndef GURICH_TEMP_TEMPLATE
+	#define GURICH_TEMP_TEMPLATE "/tmp/gurich-XXXXXX"
 #endif
 
 struct gurich_usb {
@@ -71,9 +68,8 @@ struct gurich_usb {
 };
 
 struct gurich_status {
-	bool state;
 	int ref;
-	char *status;
+	const char *status;
 };
 
 struct gurich_jbg_st {
@@ -90,9 +86,15 @@ struct gurich_files {
 	char **files;
 };
 
+/*
+ * A growable byte buffer. cap tracks the allocation so appends amortise to
+ * O(1); without it, every append reallocated to the exact new size, which
+ * made building a job quadratic in its own size.
+ */
 struct gurich_transferdata {
 	char *data;
-	size_t begin;
+	size_t len;
+	size_t cap;
 };
 
 /* General functions */
@@ -101,22 +103,18 @@ if (a == NULL) { \
 	fprintf(stderr, "ERROR: Can't allocate memory (RAM). Quitting.\n"); \
 	exit(-1); \
 }
-#define gurich_alloc_set(a) *a = '\0'
 
-size_t gurich_dirent_fs(
-	const char *path,
-	struct gurich_files * fs,
-	const char * reqfname);
+size_t gurich_pbm_pages(const char *path, struct gurich_files * fs);
 
-bool gurich_dir_checkup();
+bool gurich_tempdir(char * out, size_t outlen);
 
 char * get_username();
 
 bool gurich_workaround_pbmgen
 (
-	struct gurich_usb * g,
+	const char * tempdir,
 	const char * res,
-	char * papertype,
+	const char * papertype,
 	const char * psfile
 );
 
@@ -129,7 +127,8 @@ void gurich_jbg(FILE *pbmFp,
 
 /* "Real" printer functions */
 struct gurich_status gurich_status(struct gurich_usb * g);
-unsigned short int gurich_toner(struct gurich_usb * g);
+/* Toner percentage, or -1 when the printer could not be queried. */
+int gurich_toner(struct gurich_usb * g);
 size_t gurich_printed(struct gurich_usb * g);
 void gurich_testpage(struct gurich_usb * g);
 
@@ -138,9 +137,9 @@ void gurich_prnt
 	struct gurich_usb * g,
 	const char * username,
 	const char * res,
-	char * psfile,
+	const char * psfile,
 	const char * copies,
-	char * papertype,
+	const char * papertype,
 	bool cupsfilter
 );
 

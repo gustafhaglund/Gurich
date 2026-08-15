@@ -24,10 +24,10 @@
 #include <sys/wait.h>
 
 bool gurich_workaround_pbmgen(
-	struct gurich_usb * g, const char * res,
-	char * papertype, const char * psfile)
+	const char * tempdir, const char * res,
+	const char * papertype, const char * psfile)
 {
-	char gs_cmd[250];
+	char gs_cmd[512];
 	char * gs_papertype;
 	int status;
 
@@ -36,30 +36,33 @@ bool gurich_workaround_pbmgen(
 	}
 
 	/*
-	 * Lowercase a private copy for Ghostscript's -sPAPERSIZE, since papertype
-	 * may point to a string literal (e.g. the CUPS filter path) or a value
-	 * the caller still needs in its original case for the PJL PAPER field.
+	 * Lowercase a private copy for Ghostscript's -sPAPERSIZE. papertype may
+	 * point at a string literal (the CUPS filter path passes "A4"), so
+	 * lowercasing it in place would be a write into read-only memory, and
+	 * the caller still needs the original case for the PJL PAPER field.
 	 */
 	gs_papertype = malloc(strlen(papertype) + 1);
 	gurich_alloc_check(gs_papertype);
 	strcpy(gs_papertype, papertype);
 
 	for (size_t i = 0; gs_papertype[i] != '\0'; i++){
-		gs_papertype[i] = tolower(gs_papertype[i]);
+		gs_papertype[i] = tolower((unsigned char)gs_papertype[i]);
 	}
 
-	snprintf(
+	if ((size_t)snprintf(
 		gs_cmd,
-		250,
+		sizeof(gs_cmd),
 		"/usr/bin/env gs -sDEVICE=pbmraw -sOutputFile=%s%%03d-page.pbm "
-		"-r%s -dQUIET -dBATCH -dNOPAUSE -sPAPERSIZE=%s %s",
-		GURICH_TEMP_DIR,
+		"-r%s -dQUIET -dBATCH -dNOPAUSE -sPAPERSIZE=%s '%s'",
+		tempdir,
 		res,
 		gs_papertype,
 		psfile
-	);
-
-	//syslog (LOG_NOTICE, gs_cmd);
+	) >= sizeof(gs_cmd)) {
+		fprintf(stderr, "ERROR: The Ghostscript command line is too long.\n");
+		free(gs_papertype);
+		return false;
+	}
 
 	#ifdef _DEBUG
 	fprintf(stderr, "DEBUG: gs_cmd %s\n", gs_cmd);
