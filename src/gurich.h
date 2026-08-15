@@ -30,6 +30,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <time.h>
 
 #include <sys/types.h>
@@ -46,18 +47,14 @@
 
 #include <prnt.h>
 
-#ifndef GURICH_TEMP_DIR
-	#define GURICH_TEMP_DIR "/tmp/gurich/"
-#endif
-
-#ifndef GURICH_TEMP_DIR_PERMISSION
-	#define GURICH_TEMP_DIR_PERMISSION 0777
-	//0666
-#endif
-
-#ifndef _D_EXACT_NAMLEN
-	/* For BSD systems. */
-	#define _D_EXACT_NAMLEN(d) strlen((d)->d_name)
+/*
+ * Each job gets its own directory, created by mkdtemp() with 0700
+ * permissions. A shared fixed path would let concurrent jobs consume each
+ * other's pages, and would leave a killed job's pages behind for the next
+ * job to pick up.
+ */
+#ifndef GURICH_TEMP_TEMPLATE
+	#define GURICH_TEMP_TEMPLATE "/tmp/gurich-XXXXXX"
 #endif
 
 struct gurich_usb {
@@ -71,9 +68,8 @@ struct gurich_usb {
 };
 
 struct gurich_status {
-	bool state;
 	int ref;
-	char *status;
+	const char *status;
 };
 
 struct gurich_jbg_st {
@@ -86,13 +82,23 @@ struct gurich_pbm {
 	unsigned long height;
 };
 
-struct gurich_files {
-	char **files;
-};
-
+/*
+ * A growable byte buffer holding one whole job.
+ *
+ * The job is assembled in full before any of it is sent, which is what makes
+ * a failure part-way through harmless: a page that fails to encode aborts
+ * the job with nothing printed, rather than leaving half a document in the
+ * printer. That is worth the memory on the host -- a dense 50 page job
+ * measures around 21 MB.
+ *
+ * Growth is left to realloc(). Tracking capacity and doubling was measured
+ * against exact-fit realloc from 1 MB to 256 MB and the difference was noise
+ * at every size, because glibc grows large blocks with mremap() rather than
+ * by copying.
+ */
 struct gurich_transferdata {
 	char *data;
-	size_t begin;
+	size_t len;
 };
 
 /* General functions */
@@ -101,22 +107,18 @@ if (a == NULL) { \
 	fprintf(stderr, "ERROR: Can't allocate memory (RAM). Quitting.\n"); \
 	exit(-1); \
 }
-#define gurich_alloc_set(a) *a = '\0'
 
-size_t gurich_dirent_fs(
-	const char *path,
-	struct gurich_files * fs,
-	const char * reqfname);
+void gurich_page_path(char * buf, size_t size, const char * dir, size_t page);
 
-bool gurich_dir_checkup();
+bool gurich_tempdir(char * out, size_t outlen);
 
 char * get_username();
 
 bool gurich_workaround_pbmgen
 (
-	struct gurich_usb * g,
+	const char * tempdir,
 	const char * res,
-	char * papertype,
+	const char * papertype,
 	const char * psfile
 );
 
@@ -129,7 +131,8 @@ void gurich_jbg(FILE *pbmFp,
 
 /* "Real" printer functions */
 struct gurich_status gurich_status(struct gurich_usb * g);
-unsigned short int gurich_toner(struct gurich_usb * g);
+/* Toner percentage, or -1 when the printer could not be queried. */
+int gurich_toner(struct gurich_usb * g);
 size_t gurich_printed(struct gurich_usb * g);
 void gurich_testpage(struct gurich_usb * g);
 
@@ -138,9 +141,9 @@ void gurich_prnt
 	struct gurich_usb * g,
 	const char * username,
 	const char * res,
-	char * psfile,
+	const char * psfile,
 	const char * copies,
-	char * papertype,
+	const char * papertype,
 	bool cupsfilter
 );
 

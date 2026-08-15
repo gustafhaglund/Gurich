@@ -24,15 +24,18 @@
 #ifndef __GURICH_CBACKEND__
 #define __GURICH_CBACKEND__
 
-void data_modify(
+void data_append(
 	struct gurich_transferdata *data,
 	const char *src,
-	size_t len,
-	size_t srcbegin);
+	size_t len);
+
+/* Appends printf-formatted text; sizes the buffer itself, so no call site
+ * has to guess a maximum length. */
+void data_printf(struct gurich_transferdata *data, const char *fmt, ...);
 
 bool check_printer_status(struct gurich_usb * g);
 
-void do_send_usb(
+bool do_send_usb(
 	struct gurich_usb * g,
 	struct gurich_transferdata * usbdata);
 

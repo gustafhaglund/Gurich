@@ -22,87 +22,37 @@
 
 #include <gurich.h>
 
-size_t gurich_dirent_fs(
-	const char *path,
-	struct gurich_files * fs,
-	const char *reqfname)
+/*
+ * Builds the name Ghostscript was told to write page n to.
+ *
+ * The driver passes gs -sOutputFile=<dir>%03d-page.pbm, so the names are
+ * already known and pages can simply be walked 1, 2, 3 ... until one is
+ * missing. Listing the directory instead was what put pages in the wrong
+ * order, because readdir() returns hash order, not name order.
+ */
+void gurich_page_path(char * buf, size_t size, const char * dir, size_t page)
 {
-	DIR *r_dir;
-	struct dirent *r_read;
-	size_t files, len;
-
-	r_dir = NULL, r_read = NULL;
-	files = 0, len = 0;
-
-	if ((r_dir = opendir(path)) == NULL) {
-		return 0;
-	}
-
-	while ((r_read = readdir(r_dir)) != NULL)
-	{
-		if (!strcmp (r_read->d_name, "."))
-			continue;
-		if (!strcmp (r_read->d_name, ".."))
-			continue;
-		if (strstr(r_read->d_name, reqfname) == NULL)
-			continue;
-
-		char **resized;
-
-		resized = realloc(fs->files, (files+1) * sizeof(char *));
-		if (resized == NULL) {
-			goto dirent_mem_fail;
-		}
-		fs->files = resized;
-
-		len = (strlen(path)+_D_EXACT_NAMLEN(r_read))+1;
-		fs->files[files] = malloc(len);
-
-		if (fs->files[files] == NULL) {
-			goto dirent_mem_fail;
-		}
-
-		snprintf(fs->files[files], len, "%s%s", path, r_read->d_name);
-
-		files++;
-	}
-
-	closedir(r_dir);
-
-	return files;
-
-	dirent_mem_fail:
-		if (r_dir != NULL) {
-			closedir(r_dir);
-		}
-		for (size_t i = 0; i < files; ++i) {
-			free(fs->files[i]);
-		}
-		free(fs->files);
-		fs->files = NULL;
-		puts("Can't allocate memory (RAM). Quitting.");
-		return 0;
-		/* Expecting the function calling gurich_dirent_fs to then exit gracefully. */
+	snprintf(buf, size, "%s%03zu-page.pbm", dir, page);
 }
 
-bool gurich_dir_checkup()
+/*
+ * Creates a private directory for one job and returns it with a trailing
+ * slash. mkdtemp() makes it 0700 and unique, which is what stops two
+ * concurrent jobs from consuming each other's pages.
+ */
+bool gurich_tempdir(char * out, size_t outlen)
 {
-	struct stat s;
-	short int err;
+	char template[] = GURICH_TEMP_TEMPLATE;
 
-	err = stat(GURICH_TEMP_DIR, &s);
+	if (mkdtemp(template) == NULL) {
+		fprintf(stderr, "ERROR: Could not create a temporary directory: %s\n", strerror(errno));
+		return false;
+	}
 
-	if (err == -1) {
-		switch (errno) {
-			case ENOENT:
-				mkdir(GURICH_TEMP_DIR, GURICH_TEMP_DIR_PERMISSION);
-				break;
-			case EEXIST:
-				break;
-			default:
-				fprintf(stderr, "Directory management error: %s\n", strerror(errno));
-				return false;
-		}
+	if ((size_t)snprintf(out, outlen, "%s/", template) >= outlen) {
+		fprintf(stderr, "ERROR: Temporary directory path is too long.\n");
+		rmdir(template);
+		return false;
 	}
 
 	return true;

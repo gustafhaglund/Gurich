@@ -40,7 +40,7 @@ static void jbg_out(unsigned char *jbgenc, size_t len, void *context)
 static unsigned long getint(FILE *f)
 {
 	int c;
-	unsigned long i;
+	unsigned long i = 0; /* returned as-is when the file ends early */
 
 	while ((c = getc(f)) != EOF && !isdigit(c))
 	{
@@ -77,8 +77,9 @@ void gurich_jbg(FILE *pbmFp, struct gurich_pbm * pbm, struct gurich_jbg_st *jbg)
 	unsigned int l0 = 0;
 	int dl = -1, dh = -1;
 
-	unsigned char **bitmap;
-	bitmap = NULL;
+	/* encode_planes is 1, so the plane array is a single pointer and does
+	 * not need to be on the heap. */
+	unsigned char *bitmap[1];
 	size_t bitmap_size;
 
 	/* read, get width, height and type */
@@ -102,15 +103,12 @@ void gurich_jbg(FILE *pbmFp, struct gurich_pbm * pbm, struct gurich_jbg_st *jbg)
 	/* action */
 	bitmap_size = ((width+7) / 8) * (size_t)height;
 
-	bitmap = malloc(sizeof(unsigned char*) * encode_planes);
-	gurich_alloc_check(bitmap);
 	bitmap[0] = malloc(bitmap_size);
 	gurich_alloc_check(bitmap[0]);
 
 	if (fread(bitmap[0], bitmap_size, 1, pbmFp) != 1) {
 		fprintf(stderr, "ERROR: Could not read the PBM bitmap payload. Quitting.\n");
 		free(bitmap[0]);
-		free(bitmap);
 		goto failure;
 	}
 
@@ -124,9 +122,7 @@ void gurich_jbg(FILE *pbmFp, struct gurich_pbm * pbm, struct gurich_jbg_st *jbg)
 	jbg_enc_out(&s);
 	jbg_enc_free(&s);
 
-	/* free */
 	free(bitmap[0]);
-	free(bitmap);
 
 	return;
 

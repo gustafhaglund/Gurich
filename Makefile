@@ -30,23 +30,31 @@ CFLAGS = -Isrc -Ilibjbig -Llibjbig $(LIBS)
 
 CBACKEND_DEPEND = src/prntother.o src/basic.o src/prntcommon.o
 
-all: $(patsubst src/%.c, src/%.o,$(wildcard src/*.c)) $(patsubst src/cbackend/%.c, src/cbackend/%.o,$(wildcard src/cbackend/*.c))
+all: bin $(patsubst src/%.c, src/%.o,$(wildcard src/*.c)) $(patsubst src/cbackend/%.c, src/cbackend/%.o,$(wildcard src/cbackend/*.c))
 	$(CC) $(CFLAGS) -o $(BIN) src/*.o  $(FINAL_LIBS)
 	$(CC) $(CFLAGS) -o $(BIN_CBACKEND) $(CBACKEND_DEPEND) src/cbackend/*.o $(FINAL_LIBS)
 
-debug:
-	CFLAGS="-Isrc $(LIBS) $(DEBUG)" make
+bin:
+	mkdir -p bin
+
+# Passed on the command line so it overrides the CFLAGS set above; exporting
+# it as an environment variable would silently lose to that assignment, which
+# is why this target used to produce a non-debug build.
+debug: dev
+	$(MAKE) CFLAGS="-Isrc -Ilibjbig -Llibjbig $(LIBS) $(DEBUG)" all
 
 dev:
-	rm src/*.o
-	rm src/cbackend/*.o
+	rm -f src/*.o
+	rm -f src/cbackend/*.o
 
 cups: dev all
 	sudo cp $(BIN) /usr/lib/cups/filter/
 	sudo cp $(BIN_CBACKEND) /usr/lib/cups/backend/gurich
 
 clean:
-	rm src/*.o
-	rm src/cbackend/*.o
-	rm $(BIN)
-	rm $(BIN_CBACKEND)
+	rm -f src/*.o
+	rm -f src/cbackend/*.o
+	rm -f $(BIN)
+	rm -f $(BIN_CBACKEND)
+
+.PHONY: all debug dev cups clean

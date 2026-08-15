@@ -24,31 +24,15 @@
 
 #include <gurich.h>
 
-/* TODO
-static bool check_cmd(struct gurich_transferdata *data)
-{
-	bool ret = false;
-
-	//fprintf(stderr, "DEBUG: gurich ");
-	//fwrite(data->data, data->begin, 1, stderr);
-	//fprintf(stderr, "\n");
-
-	if (strstr(data->data, "ReportLevels") != NULL) {
-		fputs("ATTR: marker-colors=#000000\n", stderr);
-		fputs("ATTR: marker-low-levels=5\n", stderr);
-		fputs("ATTR: marker-names=Black\n", stderr);
-		fputs("ATTR: marker-types=toner\n", stderr);
-
-		ret = true;
-	}
-
-	return ret;
-}*/
+/* TODO: answer a ReportLevels job by emitting the ATTR: marker-* lines CUPS
+ * expects, so the toner gauge shows up in the print dialog. */
 
 int main(int argc, char ** argv)
 {
 	struct gurich_usb g;
-	struct gurich_transferdata bin;
+	/* Must start zeroed: data_append() reallocs data->data, so a stack
+	 * struct left uninitialised hands realloc() a garbage pointer. */
+	struct gurich_transferdata bin = { NULL, 0 };
 	g.initialized = false;
 
 	check_printer_usb(&g);
@@ -66,36 +50,50 @@ int main(int argc, char ** argv)
 	}
 
 	if (argc == 1) {
-		//printf("direct gurich \"gurich\" \"SP100/SP110 series\"\n");
-		//cupsBackendReport("usb", cupsBackendDeviceURI(argv), "Ricoh SP100/SP110 series", "", "", "");
 		printf("direct gurich:/usb/%0lx?serial=%0lx \"gurich\" \"SP100/SP110 series\"", g.idProduct, g.iSerialNumber);
+		cleanup_usb(&g);
 		return 0;
 	}
 
 	char binbuf[8192];
-	size_t readlen;
+	ssize_t readlen;
 	int fp = 0;
+	bool ok;
 
 	if (argc < 6) {
 		fprintf(stderr, "ERROR: Not enough arguments\n");
+		cleanup_usb(&g);
 		return -1;
 	} else if (argc > 6) {
 		fp = open(argv[6], O_RDONLY);
+
+		if (fp < 0) {
+			fprintf(stderr, "ERROR: Could not open %s: %s\n", argv[6], strerror(errno));
+			cleanup_usb(&g);
+			return -1;
+		}
 	}
 
-	while ((readlen = read(fp, binbuf, 8192)) > 0) {
-		data_modify(&bin, binbuf, readlen, 0);
+	/* ssize_t, not size_t: a read() error returns -1, which as an unsigned
+	 * value would pass "> 0" and be appended as a huge length. */
+	while ((readlen = read(fp, binbuf, sizeof(binbuf))) > 0) {
+		data_append(&bin, binbuf, (size_t)readlen);
+	}
+
+	if (readlen < 0) {
+		fprintf(stderr, "ERROR: Could not read the job data: %s\n", strerror(errno));
+		free(bin.data);
+		if (fp != 0) close(fp);
+		cleanup_usb(&g);
+		return -1;
 	}
 
 	if (fp != 0) close(fp);
 
-	/*if (check_cmd(&bin)) {
-		goto exit;
-	}*/
+	ok = do_send_usb(&g, &bin);
 
-	do_send_usb(&g, &bin);
+	free(bin.data);
+	cleanup_usb(&g);
 
-	//exit:
-		cleanup_usb(&g);
-		return 0;
+	return ok ? 0 : -1;
 }
